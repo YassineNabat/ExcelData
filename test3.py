@@ -25,6 +25,7 @@ class GasAppExcel:
         )
 
         if not file_path:
+            messagebox.showwarning("No file selected", "Please select an Excel file to import.")
             return
 
         try:
