@@ -18,9 +18,6 @@ class GasAppExcel:
         self.results.pack(pady=10)
 
 
-    # -----------------------------------------------------
-    # 👉 YOU MUST HAVE THIS FUNCTION
-    # -----------------------------------------------------
     def import_excel(self):
         file_path = filedialog.askopenfilename(
             title="Select Excel File",
@@ -61,7 +58,7 @@ class GasAppExcel:
 
 
     # -----------------------------------------------------
-    # 👉 YOU MUST HAVE THIS FUNCTION TOO
+    # A MUST HAVE FUNCTION 
     # -----------------------------------------------------
     def calculate_from_excel(self, data):
         self.results.delete("1.0", tk.END)
