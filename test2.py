@@ -1,178 +1,311 @@
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
-import openpyxl
-import os # Useful for getting the directory of the script
+from tkinter import messagebox
+from datetime import datetime
+import os
+from openpyxl import Workbook
 
-class GasAppExcel:
-    """
-    A tkinter application to import gas pump meter readings from an Excel file,
-    calculate the total liters sold per pump and station, and display the results.
-    """
+class ScrollableFrame(tk.Frame):
+    def __init__(self, container, *args, **kwargs):
+        super().__init__(container, *args, **kwargs)
+        self.canvas = tk.Canvas(self, height=450, width=1000, bg="#f0f0f0")
+        scrollbar = tk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
+        self.scrollable_frame = tk.Frame(self.canvas, bg="#f0f0f0")
+        self.scrollable_frame.bind(
+            "<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+        )
+        self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
+        self.canvas.configure(yscrollcommand=scrollbar.set)
+        self.canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        self.scrollable_frame.bind("<Enter>", self._bind_to_mousewheel)
+        self.scrollable_frame.bind("<Leave>", self._unbind_from_mousewheel)
+
+    def _bind_to_mousewheel(self, event):
+        self.canvas.bind_all("<MouseWheel>", self._on_mousewheel)
+        self.canvas.bind_all("<Button-4>", self._on_mousewheel)
+        self.canvas.bind_all("<Button-5>", self._on_mousewheel)
+
+    def _unbind_from_mousewheel(self, event):
+        self.canvas.unbind_all("<MouseWheel>")
+        self.canvas.unbind_all("<Button-4>")
+        self.canvas.unbind_all("<Button-5>")
+
+    def _on_mousewheel(self, event):
+        if event.num == 4:
+            self.canvas.yview_scroll(-1, "units")
+        elif event.num == 5:
+            self.canvas.yview_scroll(1, "units")
+        else:
+            self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+
+class GasCalculator:
     def __init__(self, root):
         self.root = root
-        self.root.title("Gas Station Calculator (Excel Import)")
-        self.root.geometry("700x550")
+        self.root.title("Calculateur de Pompe de Station-essence")
+        self.root.geometry("1100x650")
+        self.root.config(bg="#e0e0e0")
 
-        # --- Styling ---
-        style = ttk.Style()
-        style.configure('TButton', font=('Arial', 10, 'bold'), padding=10)
-        style.configure('TLabel', background='#f0f0f0')
-        self.root.configure(bg='#f0f0f0')
-        
-        # --- UI Elements ---
-        ttk.Label(
-            root, 
-            text="Gas Station Sales Data Analyzer", 
-            font=("Arial", 20, 'bold'),
-            foreground='#0056b3'
-        ).pack(pady=15)
+        tk.Label(
+            root,
+            text="Calculateur de Pompe de Station-essence",
+            font=("Arial", 16, "bold"),
+            bg="#e0e0e0",
+        ).grid(row=0, column=0, columnspan=5, pady=10)
 
-        # Import Button
-        ttk.Button(
-            root, 
-            text="Import Excel File", 
-            command=self.import_excel
-        ).pack(pady=10)
+        tk.Label(
+            root, text="Nombre de stations :", font=("Arial", 12), bg="#e0e0e0"
+        ).grid(row=1, column=0, sticky="w", padx=10)
+        self.num_stations_entry = tk.Entry(root, font=("Arial", 12), width=5)
+        self.num_stations_entry.grid(row=1, column=1, sticky="w")
+        tk.Button(
+            root,
+            text="Suivant",
+            font=("Arial", 12),
+            command=self.create_station_entries,
+            bg="#4CAF50",
+            fg="white",
+        ).grid(row=1, column=2, padx=10)
 
-        # Result Box with Scrollbar
-        frame = ttk.Frame(root)
-        frame.pack(pady=10, padx=20)
+        self.station_frame = ScrollableFrame(root)
+        self.station_frame.grid(row=2, column=0, columnspan=5, sticky="nsew", pady=10, padx=10)
 
-        scrollbar = ttk.Scrollbar(frame)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.calculate_button = None
+        self.station_entries = []
 
-        self.results = tk.Text(
-            frame, 
-            height=20, 
-            width=85, 
-            wrap=tk.WORD, 
-            yscrollcommand=scrollbar.set,
-            font=("Consolas", 10),
-            bg="#ffffff"
-        )
-        self.results.pack(side=tk.LEFT, fill=tk.BOTH)
-        scrollbar.config(command=self.results.yview)
+        # Make scrollable frame columns expandable
+        for col in range(5):
+            self.station_frame.scrollable_frame.grid_columnconfigure(col, weight=1)
 
-    # --- This function MUST be indented inside the class ---
-    def import_excel(self):
-        """Opens a file dialog, loads the selected Excel workbook, and extracts data."""
-        # Use initialdir to start in the user's home or documents folder for convenience
-        file_path = filedialog.askopenfilename(
-            title="Select Excel File",
-            initialdir=os.path.expanduser("~"), 
-            filetypes=[("Excel Files", "*.xlsx *.xlsm *.xltx *.xltm")]
-        )
-
-        if not file_path:
-            # User canceled the file selection
-            return
-
-        self.results.delete("1.0", tk.END)
-        self.results.insert(tk.END, f"Attempting to read file: {file_path}\n\n")
+    def create_station_entries(self):
+        for widget in self.station_frame.scrollable_frame.winfo_children():
+            widget.destroy()
+        self.station_entries = []
 
         try:
-            # data_only=True ensures we get the calculated value of a cell, not the formula.
-            wb = openpyxl.load_workbook(file_path, data_only=True)
-            sheet = wb.active # Use the active sheet (usually the first one)
+            self.num_stations = int(self.num_stations_entry.get())
+            if self.num_stations < 1:
+                raise ValueError
+        except ValueError:
+            messagebox.showerror("Erreur", "Entrez un nombre valide de stations")
+            return
 
-            data = []
-            
-            # Assuming the first row is headers, start iteration from the second row
-            for row_index, row in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):
-                
-                # Check for completely empty rows
-                if not any(row):
-                    continue
+        tk.Label(
+            self.station_frame.scrollable_frame,
+            text="Entrez le nombre de pompes pour chaque catégorie par station :",
+            font=("Arial", 12, "bold"),
+            bg="#f0f0f0",
+        ).grid(row=0, column=0, columnspan=5, pady=5)
 
-                # We expect the first 4 columns to be: Station, Pump, Initial Meter, Final Meter
-                try:
-                    station = row[0]
-                    pump = row[1]
-                    initial = row[2]
-                    final = row[3]
-                except IndexError:
-                    messagebox.showwarning(
-                        "Data Issue", 
-                        f"Skipping row {row_index}: Data is incomplete (less than 4 columns)."
-                    )
-                    continue
+        self.pump_inputs = []
+        for i in range(self.num_stations):
+            tk.Label(
+                self.station_frame.scrollable_frame,
+                text=f"Station {i+1}",
+                font=("Arial", 12),
+                bg="#f0f0f0",
+            ).grid(row=i + 1, column=0, sticky="w", padx=5)
+            tk.Label(
+                self.station_frame.scrollable_frame, text="Pompes Essence :", bg="#f0f0f0"
+            ).grid(row=i + 1, column=1, sticky="w", padx=5)
+            essence_entry = tk.Entry(self.station_frame.scrollable_frame, width=5)
+            essence_entry.grid(row=i + 1, column=2, sticky="w", padx=5)
+            tk.Label(
+                self.station_frame.scrollable_frame, text="Pompes Gasoil :", bg="#f0f0f0"
+            ).grid(row=i + 1, column=3, sticky="w", padx=5)
+            gasoil_entry = tk.Entry(self.station_frame.scrollable_frame, width=5)
+            gasoil_entry.grid(row=i + 1, column=4, sticky="w", padx=5)
+            self.pump_inputs.append((essence_entry, gasoil_entry))
 
-                # Ensure critical fields have values and can be converted to numbers
-                if station is None or pump is None or initial is None or final is None:
-                    messagebox.showwarning(
-                        "Data Issue", 
-                        f"Skipping row {row_index}: Found empty cells in critical columns."
-                    )
-                    continue
+        tk.Button(
+            self.station_frame.scrollable_frame,
+            text="Créer le tableau des pompes",
+            font=("Arial", 12),
+            command=self.create_pump_table,
+            bg="#2196F3",
+            fg="white",
+        ).grid(row=self.num_stations + 1, column=0, columnspan=5, pady=10)
 
-                try:
-                    # Clean the data types
-                    data.append({
-                        "station": str(station).strip(), # Keep station as string/ID
-                        "pump": str(pump).strip(),       # Keep pump as string/ID
-                        "initial": float(initial),
-                        "final": float(final),
-                    })
-                except ValueError as ve:
-                    messagebox.showwarning(
-                        "Data Conversion Error", 
-                        f"Skipping row {row_index}: Could not convert meter reading to number. Error: {ve}"
-                    )
-            
-            # Only proceed if data was successfully loaded
-            if data:
-                self.calculate_from_excel(data)
-            else:
-                self.results.insert(tk.END, "No valid data rows were found in the file.")
+    def create_pump_table(self):
+        self.station_pumps = []
+        try:
+            for e_entry, g_entry in self.pump_inputs:
+                essence_pumps = int(e_entry.get())
+                gasoil_pumps = int(g_entry.get())
+                if essence_pumps < 0 or gasoil_pumps < 0:
+                    raise ValueError
+                self.station_pumps.append((essence_pumps, gasoil_pumps))
+        except ValueError:
+            messagebox.showerror("Erreur", "Entrez des nombres valides pour les pompes")
+            return
 
-        except Exception as e:
-            # Catch all other possible errors (like file corruption or being opened elsewhere)
-            messagebox.showerror("File Error", f"Could not process Excel file:\n{e}")
+        for widget in self.station_frame.scrollable_frame.winfo_children():
+            widget.destroy()
 
-    # --- This function MUST be indented inside the class ---
-    def calculate_from_excel(self, data):
-        """Processes the clean data to calculate totals per station and pump."""
-        
-        self.results.insert(tk.END, "\n--- DETAILED PUMP READINGS ---\n")
+        self.station_entries = []
+        self.price_entries = []
 
-        station_totals = {}
-        grand_total = 0
+        for s_index, (essence_pumps, gasoil_pumps) in enumerate(self.station_pumps):
+            frame = tk.Frame(
+                self.station_frame.scrollable_frame, bd=2, relief="groove", padx=5, pady=5, bg="#fff"
+            )
+            frame.grid(row=s_index, column=0, pady=5, sticky="ew")
 
-        for row in data:
-            station = row["station"]
-            pump = row["pump"]
-            initial = row["initial"]
-            final = row["final"]
-            
-            # Simple calculation for pumped volume
-            pumped = final - initial
+            for col in range(4):
+                frame.grid_columnconfigure(col, weight=1)
 
-            # Aggregate totals
-            if station not in station_totals:
-                station_totals[station] = 0
+            tk.Label(frame, text=f"Station {s_index+1}", font=("Arial", 12, "bold"), bg="#fff").grid(
+                row=0, column=0, columnspan=4, pady=2
+            )
+            tk.Label(frame, text="Prix par litre Essence (DH) :", bg="#fff").grid(row=1, column=0, sticky="w", padx=5)
+            price_essence = tk.Entry(frame, width=10)
+            price_essence.grid(row=1, column=1, sticky="w", padx=5)
+            tk.Label(frame, text="Prix par litre Gasoil (DH) :", bg="#fff").grid(row=1, column=2, sticky="w", padx=5)
+            price_gasoil = tk.Entry(frame, width=10)
+            price_gasoil.grid(row=1, column=3, sticky="w", padx=5)
+            self.price_entries.append((price_essence, price_gasoil))
 
-            station_totals[station] += pumped
-            grand_total += pumped
+            pumps_entries = []
 
-            # Display individual reading results
-            self.results.insert(
-                tk.END,
-                f"Station ID: {station.ljust(10)} | Pump {pump.ljust(3)} | Sold: {pumped:,.2f} liters\n"
+            tk.Label(frame, text="Pompe #", bg="#fff", font=("Arial", 10, "bold")).grid(row=2, column=0)
+            tk.Label(frame, text="Initial", bg="#fff", font=("Arial", 10, "bold")).grid(row=2, column=1)
+            tk.Label(frame, text="Final", bg="#fff", font=("Arial", 10, "bold")).grid(row=2, column=2)
+            tk.Label(frame, text="Catégorie", bg="#fff", font=("Arial", 10, "bold")).grid(row=2, column=3)
+
+            r = 3
+            for p in range(essence_pumps):
+                tk.Label(frame, text=f"{p+1}", bg="#f9f9f9").grid(row=r, column=0)
+                initial = tk.Entry(frame, width=10, bg="#f9f9f9")
+                initial.grid(row=r, column=1)
+                final = tk.Entry(frame, width=10, bg="#f9f9f9")
+                final.grid(row=r, column=2)
+                tk.Label(frame, text="Essence", bg="#f9f9f9").grid(row=r, column=3)
+                pumps_entries.append((initial, final, "Essence"))
+                r += 1
+            for p in range(gasoil_pumps):
+                tk.Label(frame, text=f"{p+1}", bg="#e6f2ff").grid(row=r, column=0)
+                initial = tk.Entry(frame, width=10, bg="#e6f2ff")
+                initial.grid(row=r, column=1)
+                final = tk.Entry(frame, width=10, bg="#e6f2ff")
+                final.grid(row=r, column=2)
+                tk.Label(frame, text="Gasoil", bg="#e6f2ff").grid(row=r, column=3)
+                pumps_entries.append((initial, final, "Gasoil"))
+                r += 1
+            self.station_entries.append(pumps_entries)
+
+        if self.calculate_button:
+            self.calculate_button.destroy()
+        self.calculate_button = tk.Button(
+            self.root,
+            text="Calculer Totaux",
+            font=("Arial", 12),
+            command=self.calculate_totals,
+            bg="#FF5722",
+            fg="white",
+        )
+        self.calculate_button.grid(row=3, column=0, columnspan=5, pady=10)
+
+    def calculate_totals(self):
+        grand_essence_liters = 0
+        grand_gasoil_liters = 0
+        grand_essence_revenue = 0
+        grand_gasoil_revenue = 0
+
+        self.results = []
+        self.detailed_results = []
+
+        try:
+            for s_index, pumps in enumerate(self.station_entries):
+                price_essence = float(self.price_entries[s_index][0].get())
+                price_gasoil = float(self.price_entries[s_index][1].get())
+                total_essence = 0
+                total_gasoil = 0
+                revenue_essence = 0
+                revenue_gasoil = 0
+                for initial_entry, final_entry, category in pumps:
+                    initial = float(initial_entry.get())
+                    final = float(final_entry.get())
+                    liters = final - initial
+                    if category == "Essence":
+                        total_essence += liters
+                        revenue_essence += liters * price_essence
+                    else:
+                        total_gasoil += liters
+                        revenue_gasoil += liters * price_gasoil
+                    self.detailed_results.append([f"Station {s_index+1}", initial, final, liters, category])
+
+                grand_essence_liters += total_essence
+                grand_gasoil_liters += total_gasoil
+                grand_essence_revenue += revenue_essence
+                grand_gasoil_revenue += revenue_gasoil
+
+                self.results.append([
+                    f"Station {s_index+1}",
+                    total_essence,
+                    revenue_essence,
+                    total_gasoil,
+                    revenue_gasoil
+                ])
+
+            result_text = ""
+            for row in self.results:
+                result_text += (
+                    f"{row[0]}:\n"
+                    f"  Essence: {row[1]} L, Chiffre d'affaires: {row[2]} DH\n"
+                    f"  Gasoil: {row[3]} L, Chiffre d'affaires: {row[4]} DH\n\n"
+                )
+            result_text += (
+                f"Totaux généraux:\n"
+                f"  Essence: {grand_essence_liters} L, Chiffre d'affaires: {grand_essence_revenue} DH\n"
+                f"  Gasoil: {grand_gasoil_liters} L, Chiffre d'affaires: {grand_gasoil_revenue} DH"
             )
 
-        self.results.insert(tk.END, "\n\n--- STATION SALES SUMMARY ---\n")
+            messagebox.showinfo("Totaux", result_text)
 
-        # Display Summary
-        for station, total in station_totals.items():
-            self.results.insert(tk.END, f"Total for Station {station.ljust(10)}: {total:,.2f} liters\n")
+            # Export button
+            if not hasattr(self, "export_button") or not self.export_button:
+                self.export_button = tk.Button(
+                    self.root,
+                    text="Exporter vers Excel",
+                    font=("Arial", 12),
+                    command=self.export_to_excel,
+                    bg="#9C27B0",
+                    fg="white",
+                )
+                self.export_button.grid(row=4, column=0, columnspan=5, pady=10)
 
-        self.results.insert(tk.END, "\n==============================\n")
-        self.results.insert(tk.END, f"GRAND TOTAL SALES: {grand_total:,.2f} liters\n")
-        self.results.insert(tk.END, "==============================\n")
+        except ValueError:
+            messagebox.showerror("Erreur", "Remplissez tous les champs avec des nombres valides")
+
+    def export_to_excel(self):
+        # Dynamic folder path (works on any laptop)
+        folder_path = os.path.join(os.path.expanduser("~"), "Documents", "GasReports")
+        if not os.path.exists(folder_path):
+            os.makedirs(folder_path)
+
+        wb = Workbook()
+        ws1 = wb.active
+        ws1.title = "Stations Totaux"
+        ws1.append(["Station", "Essence (L)", "Chiffre d'affaires Essence (DH)", "Gasoil (L)", "Chiffre d'affaires Gasoil (DH)"])
+        for row in self.results:
+            ws1.append(row)
+
+        ws2 = wb.create_sheet("Pompes Détails")
+        ws2.append(["Station", "Initial", "Final", "Litres", "Catégorie"])
+        for row in self.detailed_results:
+            ws2.append(row)
+
+        today = datetime.now().strftime("%Y-%m-%d")
+        filename = os.path.join(folder_path, f"Gas_Station_Report_{today}.xlsx")
+
+        try:
+            wb.save(filename)
+            messagebox.showinfo("Succès", f"Les résultats ont été exportés vers:\n{filename}")
+        except Exception as e:
+            messagebox.showerror("Erreur", f"Impossible de sauvegarder le fichier Excel:\n{e}")
 
 
-# --- Main Application Loop ---
 if __name__ == "__main__":
     root = tk.Tk()
-    app = GasAppExcel(root)
+    app = GasCalculator(root)
     root.mainloop()
